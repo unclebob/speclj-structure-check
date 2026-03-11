@@ -15,6 +15,18 @@ Speclj silently ignores certain nesting mistakes — like an `(it)` inside anoth
 
 Requires [Clojure CLI](https://clojure.org/guides/install_clojure).
 
+```bash
+clj -M:check --help
+```
+
+```
+Usage: speclj-structure-check [--tree] [--help] <path>...
+
+Options:
+  --tree  Print the Speclj form tree after the result
+  --help  Print this help message
+```
+
 ### Check a file
 
 ```bash
@@ -55,6 +67,7 @@ spec/my_spec.clj: OK
 ```
 
 Exit code is `1` if any errors are found, `0` otherwise.
+`--help` prints usage to stdout and exits with code `0`.
 
 ## Running the Tests
 

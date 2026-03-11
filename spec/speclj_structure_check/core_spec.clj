@@ -55,6 +55,55 @@
   (it "non-hash before quote does not enter regex mode"
     (should= 0 (:depth (pc/scan "(def x \"a\")")))))
 
+(describe "private helpers"
+  (it "treats a plain quote as string mode, not regex mode"
+    (should= {:mode :string}
+             (#'pc/handle-normal-char {:mode :normal} \" nil)))
+
+  (it "treats hash quote as regex mode and skips the quote"
+    (should= {:mode :regex :skip true}
+             (#'pc/handle-normal-char {:mode :normal} \# \")))
+
+  (it "clears skip without re-enabling it"
+    (should= false (:skip (#'pc/process-char {:skip true} \x nil))))
+
+  (it "clears escape without re-enabling it"
+    (should= false (:escape (#'pc/process-char {:escape true} \x nil))))
+
+  (it "extracts a token through end of input"
+    (should= "foo" (#'pc/extract-token [\( \f \o \o] 0)))
+
+  (it "returns nil when there is no token after an opening paren"
+    (should= nil (#'pc/extract-token [\( \)] 0))
+    (should= nil (#'pc/extract-token [\(] 0)))
+
+  (it "does not push a form when depth did not increase"
+    (let [state {:line 1 :errors [] :form-stack []}
+          chars [\( \d \e \s \c \r \i \b \e]]
+      (should= state (#'pc/maybe-push-form state chars 0 0 0))))
+
+  (it "pushes a valid speclj form onto the stack"
+    (let [state {:line 3 :errors [] :form-stack []}
+          chars [\( \d \e \s \c \r \i \b \e]]
+      (should= [{:form "describe" :line 3 :depth 0}]
+               (:form-stack (#'pc/maybe-push-form state chars 0 0 1)))))
+
+  (it "does not mark a form completed when depth is unchanged"
+    (let [state {:form-stack [{:depth 1 :form "it" :line 2}]}]
+      (should-not (#'pc/completed-form? state \) 1 1 :normal))))
+
+  (it "returns tree opts only when tree flag is set"
+    (should= {} (#'pc/tree-opts #{}))
+    (should= {:tree true} (#'pc/tree-opts #{"--tree"})))
+
+  (it "returns an empty tree for empty forms"
+    (should= "" (pc/format-tree [])))
+
+  (it "prints missing paths as failures"
+    (let [out (with-out-str
+                (should-not (#'pc/print-missing-path "/tmp/nope.clj")))]
+      (should-contain "/tmp/nope.clj: not found" out))))
+
 (describe "speclj form tracking"
   (it "detects describe form"
     (let [result (pc/scan "(describe \"foo\")")]
@@ -175,6 +224,13 @@
     (should= "(describe :line 1)" (pc/format-tree [{:form "describe" :line 1}]))))
 
 (describe "check-file"
+  (it "returns OK for an empty file"
+    (let [tmp (java.io.File/createTempFile "empty-spec" ".clj")
+          path (.getAbsolutePath tmp)]
+      (.deleteOnExit tmp)
+      (spit path "")
+      (should= "OK" (pc/check-file path))))
+
   (it "returns errors for bad structure"
     (let [tmp (java.io.File/createTempFile "bad-spec" ".clj")
           path (.getAbsolutePath tmp)]
@@ -208,5 +264,74 @@
     (let [results (pc/check-directory "spec/speclj_structure_check")]
       (should (pos? (count results)))
       (should (every? #(= "OK" (:result %)) results)))))
+
+(describe "run-cli"
+  (it "prints usage to stdout for --help"
+    (let [out (with-out-str
+                (should= 0 (pc/run-cli ["--help"])))]
+      (should-contain "Usage: speclj-structure-check" out)
+      (should-contain "--help" out)
+      (should-contain "--tree" out)))
+
+  (it "does not scan files when --help is present"
+    (with-redefs [pc/check-file (fn [& _] (throw (ex-info "should not scan file" {})))
+                  pc/check-directory (fn [& _] (throw (ex-info "should not scan dir" {})))]
+      (let [out (with-out-str
+                  (should= 0 (pc/run-cli ["--help" "spec"])))]
+        (should-contain "Usage: speclj-structure-check" out))))
+
+  (it "returns success for a clean file"
+    (let [tmp (java.io.File/createTempFile "cli-clean" ".clj")
+          path (.getAbsolutePath tmp)]
+      (.deleteOnExit tmp)
+      (spit path "(describe \"x\" (it \"y\"))")
+      (let [out (with-out-str
+                  (should= 0 (pc/run-cli [path])))]
+        (should-contain (str path ": OK") out))))
+
+  (it "returns failure for a bad file"
+    (let [tmp (java.io.File/createTempFile "cli-bad" ".clj")
+          path (.getAbsolutePath tmp)]
+      (.deleteOnExit tmp)
+      (spit path "(describe \"x\" (it \"y\" (it \"z\")))")
+      (let [out (with-out-str
+                  (should= 1 (pc/run-cli [path])))]
+        (should-contain "ERROR" out))))
+
+  (it "returns success for a directory of clean files"
+    (let [dir (doto (java.io.File/createTempFile "cli-dir" "")
+                .delete
+                .mkdir)
+          spec-file (java.io.File. dir "sample.clj")]
+      (.deleteOnExit dir)
+      (.deleteOnExit spec-file)
+      (spit spec-file "(describe \"x\" (it \"y\"))")
+      (let [out (with-out-str
+                  (should= 0 (pc/run-cli [(.getAbsolutePath dir)])))]
+        (should-contain (str (.getAbsolutePath spec-file) ": OK") out))))
+
+  (it "prints not found for a missing path"
+    (let [path "/tmp/speclj-structure-check-missing-file.clj"
+          out (with-out-str
+                (should= 1 (pc/run-cli [path])))]
+      (should-contain (str path ": not found") out)))
+
+  (it "returns zero only when every path succeeds"
+    (with-redefs [pc/path-ok? (fn [path _] (not= path "bad"))]
+      (should= 0 (#'pc/run-paths ["good" "also-good"] {}))
+      (should= 1 (#'pc/run-paths ["good" "bad"] {}))))
+
+  (it "passes tree opts through to file checks"
+    (let [received (atom nil)
+          tmp (java.io.File/createTempFile "cli-tree" ".clj")
+          path (.getAbsolutePath tmp)]
+      (.deleteOnExit tmp)
+      (spit path "(describe \"x\")")
+      (with-redefs [pc/check-file (fn [_ opts]
+                                    (reset! received opts)
+                                    "OK")]
+        (with-out-str
+          (should= 0 (pc/run-cli ["--tree" path]))))
+      (should= {:tree true} @received))))
 
 (run-specs)

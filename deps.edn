@@ -1,6 +1,16 @@
 {:paths ["src"]
  :aliases
  {:check {:main-opts ["-m" "speclj-structure-check.core"]}
+  :cov {:extra-deps {cloverage/cloverage {:mvn/version "1.2.4"}
+                     speclj/speclj {:mvn/version "3.10.0"}}
+        :extra-paths ["spec"]
+        :main-opts ["-m" "speclj.cloverage" "--" "-p" "src" "-s" "spec"]}
+  :crap {:extra-deps {io.github.unclebob/crap4clj {:git/sha "992a5dd41bb337a843c02fb4829a69af7bfcf595"}}
+         :main-opts ["-m" "crap4clj.core"]}
+  :mutate {:extra-deps {io.github.unclebob/clj-mutate {:git/sha "fc477e8670eb1fb3c0ef52aa847d08863a0fe835"}
+                        speclj/speclj {:mvn/version "3.10.0"}}
+           :extra-paths ["spec"]
+           :main-opts ["-m" "clj-mutate.core"]}
   :spec {:extra-paths ["spec"]
          :extra-deps {speclj/speclj {:mvn/version "3.10.0"}}
          :main-opts ["-m" "speclj.main" "-c"]}}}
